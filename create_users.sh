@@ -54,23 +54,25 @@ while IFS=';' read -r username groups; do
   # Check if user already exists
   if id "$username" &> /dev/null; then
     echo "$(date +'%Y-%m-%d %H:%M:%S') WARNING: User '$username' already exists. Skipping..."
+  else
+    # Create primary group if the primary group does not exist
+    if ! getent group "$username" >/dev/null 2>&1; then
+      sudo groupadd "$username"
+      echo "$(date +'%Y-%m-%d %H:%M:%S') Created primary group '$username' for user."
+    fi
+
+    # Create user with extra options
+    useradd -m -g "$username" -s /bin/bash -p $(echo "$password" | openssl passwd -1) "$username"
+    echo "$(date +'%Y-%m-%d %H:%M:%S') Successfully created user '$username'."
+
+    # Add user to primary group
+    sudo usermod -g "$username" "$username"
+    echo "$(date +'%Y-%m-%d %H:%M:%S') Added user '$username' to primary group '$username'."
+  fi
+
+  if id -u "$username" &> /dev/null; then
     continue
   fi
-
-  # Create primary group if the primary group does not exist
-  if ! getent group "$username" >/dev/null 2>&1; then
-    sudo groupadd "$username"
-    echo "$(date +'%Y-%m-%d %H:%M:%S') Created primary group '$username' for user."
-  fi
-
-  # Create user with extra options
-  useradd -m -g "$username" -s /bin/bash -p $(echo "$password" | openssl passwd -1) "$username"
-  echo "$(date +'%Y-%m-%d %H:%M:%S') Successfully created user '$username'."
-
-  # Add user to primary group
-  sudo usermod -g "$username" "$username"
-  echo "$(date +'%Y-%m-%d %H:%M:%S') Added user '$username' to primary group '$username'."
-  
 
   # Store username and password in a password file
   echo "$username,$password" >> "$password_file"
