@@ -21,32 +21,30 @@ fi
 
 # Function to generate a random password
 generate_password() {
-  length=16
-  cat /dev/urandom | tr -dc 'A-Za-z0-9!@#$%^&*' | fold -w "$length" | head -n 1
+  local length=16
+  tr -dc 'A-Za-z0-9!@#$%^&*' < /dev/urandom | fold -w "$length" | head -n 1
 }
 
-# Create log and password storage directories if they don't exist
+# Set log and password file paths
 log_file="/var/log/user_management.log"
 password_file="/var/secure/user_passwords.txt"
 
-if [[ ! -d $(dirname "$log_file") ]]; then
-  sudo mkdir -p $(dirname "$log_file")
-fi
+# Create log and password storage directories if they don't exist
+sudo mkdir -p $(dirname "$log_file")
+sudo mkdir -p $(dirname "$password_file")
 
-if [[ ! -d $(dirname "$password_file") ]]; then
-  sudo mkdir -p $(dirname "$password_file")
-fi
+# Ensure log and password files have secure permissions
+sudo touch "$log_file" "$password_file"
+sudo chmod 600 "$password_file"
+sudo chmod 644 "$log_file"
 
 # Redirect standard output and error to log file
 exec &>> "$log_file"
 
 # Function to log messages
 log() {
-  echo "$(date +'%Y-%m-%d %H:%M:%S') $1" >> "$log_file"
+  echo "$(date +'%Y-%m-%d %H:%M:%S') $1" | sudo tee -a "$log_file" > /dev/null
 }
-
-# Ensure password file has secure permissions
-sudo chmod 600 "$password_file"
 
 # Loop through users in the file
 while IFS=';' read -r username groups; do
@@ -55,30 +53,34 @@ while IFS=';' read -r username groups; do
   username=$(echo "$username" | xargs)
   groups=$(echo "$groups" | xargs | tr -d ' ')
 
+  # Generate a random password
   password=$(generate_password)
 
   # Check if user already exists
   if id -u "$username" &> /dev/null; then
     log "WARNING: User '$username' already exists. Adding to specified groups."
   else
-    # Create primary group if the primary group does not exist
+    # Create primary group if it does not exist
     if ! getent group "$username" >/dev/null 2>&1; then
       sudo groupadd "$username"
       log "Created primary group '$username' for user."
     fi
 
-    # Create user with extra options
+    # Create user with home directory and specified shell
     sudo useradd -m -g "$username" -s /bin/bash -p $(echo "$password" | openssl passwd -1) "$username"
     if [ $? -eq 0 ]; then
       log "Successfully created user '$username'."
+      echo "$username,$password" | sudo tee -a "$password_file" > /dev/null
     else
       log "ERROR: Failed to create user '$username'."
       continue
     fi
-
-    # Store username and password in a password file
-    echo "$username,$password" | sudo tee -a "$password_file" > /dev/null
   fi
+
+  # Set home directory permissions and ownership
+  sudo chmod 700 /home/"$username"
+  sudo chown "$username":"$username" /home/"$username"
+  log "Set permissions and ownership for /home/$username."
 
   # Add user to primary group
   sudo usermod -g "$username" "$username"
@@ -87,14 +89,20 @@ while IFS=';' read -r username groups; do
   # Add user to additional groups
   for group in $(echo "$groups" | tr ',' ' '); do
     if ! getent group "$group" >/dev/null 2>&1; then
-      sudo groupadd "$group" &>> "$log_file"
+      sudo groupadd "$group"
       log "Created group '$group'."
     fi
-    sudo gpasswd -a "$username" "$group" &>> "$log_file"
+    sudo gpasswd -a "$username" "$group"
     log "Added user '$username' to group '$group'."
   done
 
-  # Check if user belongs to all specified groups
+  # Verification logs
+  if id "$username" &> /dev/null; then
+    log "User '$username' creation verified."
+  else
+    log "ERROR: User '$username' creation failed."
+  fi
+
   for group in $(echo "$groups" | tr ',' ' '); do
     if id -nG "$username" | grep -qw "$group"; then
       log "User '$username' is a member of group '$group'."
@@ -103,7 +111,6 @@ while IFS=';' read -r username groups; do
     fi
   done
 
-  # Check if user belongs to their personal group
   if id -nG "$username" | grep -qw "$username"; then
     log "User '$username' is a member of their personal group '$username'."
   else
