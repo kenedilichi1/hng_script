@@ -47,7 +47,6 @@ while IFS=';' read -r username groups; do
   username=$(echo "$username" | xargs)
   groups=$(echo "$groups" | xargs | tr -d ' ')
 
-
   password=$(generate_password)
 
   # Check if user already exists
@@ -61,7 +60,7 @@ while IFS=';' read -r username groups; do
     fi
 
     # Create user with extra options
-    useradd -m -g "$username" -s /bin/bash -p $(echo "$password" | openssl passwd -1) "$username"
+    sudo useradd -m -g "$username" -s /bin/bash -p $(echo "$password" | openssl passwd -1) "$username"
     echo "$(date +'%Y-%m-%d %H:%M:%S') Successfully created user '$username'."
 
     # Add user to primary group
@@ -79,8 +78,12 @@ while IFS=';' read -r username groups; do
 
   for group in $(echo "$groups" | tr ',' ' '); do
     if getent group "$group" >/dev/null 2>&1; then
-      sudo gpasswd -a "$username" "$group"
-      echo "$(date +'%Y-%m-%d %H:%M:%S') Added user '$username' to existing group '$group'."
+      if id -nG "$username" | grep -qw "$group"; then
+        echo "$(date +'%Y-%m-%d %H:%M:%S') User '$username' already in group '$group'. Skipping..."
+      else
+        sudo gpasswd -a "$username" "$group"
+        echo "$(date +'%Y-%m-%d %H:%M:%S') Added user '$username' to existing group '$group'."
+      fi
     else
       sudo groupadd "$group"
       echo "$(date +'%Y-%m-%d %H:%M:%S') Created group '$group' and added user '$username'."
@@ -90,4 +93,23 @@ while IFS=';' read -r username groups; do
 
 done < "$1"
 
-echo "$(date +'%Y-%m-%d %H:%M:%S') User creation process completed. Check $log_file for details."
+# Verify user belongs to all specified groups
+while IFS=';' read -r username groups; do
+  username=$(echo "$username" | xargs)
+  groups=$(echo "$groups" | xargs | tr -d ' ')
+
+  missing_groups=()
+  for group in $(echo "$groups" | tr ',' ' '); do
+    if ! id -nG "$username" | grep -qw "$group"; then
+      missing_groups+=("$group")
+    fi
+  done
+
+  if [ ${#missing_groups[@]} -ne 0 ]; then
+    echo "$(date +'%Y-%m-%d %H:%M:%S') ERROR: User '$username' is missing from groups: ${missing_groups[*]}"
+  else
+    echo "$(date +'%Y-%m-%d %H:%M:%S') User '$username' belongs to all specified groups."
+  fi
+done < "$1"
+
+echo "$(date +'%Y-%m-%d %H:%M:%S') User creation and verification process completed. Check $log_file for details."
