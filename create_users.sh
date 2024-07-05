@@ -40,6 +40,11 @@ fi
 # Redirect standard output and error to log file
 exec &>> "$log_file"
 
+# Function to log messages
+log() {
+  echo "$(date +'%Y-%m-%d %H:%M:%S') $1" >> "$log_file"
+}
+
 # Loop through users in the file
 while IFS=';' read -r username groups; do
 
@@ -51,65 +56,61 @@ while IFS=';' read -r username groups; do
 
   # Check if user already exists
   if id "$username" &> /dev/null; then
-    echo "$(date +'%Y-%m-%d %H:%M:%S') WARNING: User '$username' already exists. Skipping..."
+    log "WARNING: User '$username' already exists. Skipping..."
   else
     # Create primary group if the primary group does not exist
     if ! getent group "$username" >/dev/null 2>&1; then
       sudo groupadd "$username"
-      echo "$(date +'%Y-%m-%d %H:%M:%S') Created primary group '$username' for user."
+      log "Created primary group '$username' for user."
     fi
 
     # Create user with extra options
     sudo useradd -m -g "$username" -s /bin/bash -p $(echo "$password" | openssl passwd -1) "$username"
-    echo "$(date +'%Y-%m-%d %H:%M:%S') Successfully created user '$username'."
+    log "Successfully created user '$username'."
 
     # Add user to primary group
     sudo usermod -g "$username" "$username"
-    echo "$(date +'%Y-%m-%d %H:%M:%S') Added user '$username' to primary group '$username'."
+    log "Added user '$username' to primary group '$username'."
   fi
 
   # Store username and password in a password file
   echo "$username,$password" >> "$password_file"
 
   # Add user to additional groups 
-  # Check if the group exists
-  # If the group exists, add user using gpasswd
-  # If the group doesn't exist, create it and add the user to the group
-
   for group in $(echo "$groups" | tr ',' ' '); do
     if getent group "$group" >/dev/null 2>&1; then
-      if id -nG "$username" | grep -qw "$group"; then
-        echo "$(date +'%Y-%m-%d %H:%M:%S') User '$username' already in group '$group'. Skipping..."
-      else
-        sudo gpasswd -a "$username" "$group"
-        echo "$(date +'%Y-%m-%d %H:%M:%S') Added user '$username' to existing group '$group'."
-      fi
+      sudo gpasswd -a "$username" "$group"
+      log "Added user '$username' to existing group '$group'."
     else
       sudo groupadd "$group"
-      echo "$(date +'%Y-%m-%d %H:%M:%S') Created group '$group' and added user '$username'."
+      log "Created group '$group' and added user '$username'."
       sudo gpasswd -a "$username" "$group"
     fi
   done
 
-done < "$1"
+  # Check if user is created
+  if id "$username" &> /dev/null; then
+    log "User '$username' creation verified."
+  else
+    log "ERROR: User '$username' creation failed."
+  fi
 
-# Verify user belongs to all specified groups
-while IFS=';' read -r username groups; do
-  username=$(echo "$username" | xargs)
-  groups=$(echo "$groups" | xargs | tr -d ' ')
-
-  missing_groups=()
+  # Check if user belongs to all specified groups
   for group in $(echo "$groups" | tr ',' ' '); do
-    if ! id -nG "$username" | grep -qw "$group"; then
-      missing_groups+=("$group")
+    if id -nG "$username" | grep -qw "$group"; then
+      log "User '$username' is a member of group '$group'."
+    else
+      log "ERROR: User '$username' is not a member of group '$group'."
     fi
   done
 
-  if [ ${#missing_groups[@]} -ne 0 ]; then
-    echo "$(date +'%Y-%m-%d %H:%M:%S') ERROR: User '$username' is missing from groups: ${missing_groups[*]}"
+  # Check if user belongs to their personal group
+  if id -nG "$username" | grep -qw "$username"; then
+    log "User '$username' is a member of their personal group '$username'."
   else
-    echo "$(date +'%Y-%m-%d %H:%M:%S') User '$username' belongs to all specified groups."
+    log "ERROR: User '$username' is not a member of their personal group '$username'."
   fi
+
 done < "$1"
 
-echo "$(date +'%Y-%m-%d %H:%M:%S') User creation and verification process completed. Check $log_file for details."
+log "User creation process completed. Check $log_file for details."
