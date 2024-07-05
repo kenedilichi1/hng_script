@@ -45,6 +45,9 @@ log() {
   echo "$(date +'%Y-%m-%d %H:%M:%S') $1" >> "$log_file"
 }
 
+# Ensure password file has secure permissions
+sudo chmod 600 "$password_file"
+
 # Loop through users in the file
 while IFS=';' read -r username groups; do
 
@@ -54,14 +57,9 @@ while IFS=';' read -r username groups; do
 
   password=$(generate_password)
 
-  if id -u "$username" &> /dev/null; then
-    log_message "user already exists"
-    continue
-  fi
-
   # Check if user already exists
-  if id "$username" &> /dev/null; then
-    log "WARNING: User '$username' already exists. Skipping..."
+  if id -u "$username" &> /dev/null; then
+    log "WARNING: User '$username' already exists. Adding to specified groups."
   else
     # Create primary group if the primary group does not exist
     if ! getent group "$username" >/dev/null 2>&1; then
@@ -71,38 +69,30 @@ while IFS=';' read -r username groups; do
 
     # Create user with extra options
     sudo useradd -m -g "$username" -s /bin/bash -p $(echo "$password" | openssl passwd -1) "$username"
-    log "Successfully created user '$username'."
-
-    if id -u "$username" &> /dev/null; then
-      log "Ok: User '$username' created"
+    if [ $? -eq 0 ]; then
+      log "Successfully created user '$username'."
+    else
+      log "ERROR: Failed to create user '$username'."
       continue
     fi
-    # Add user to primary group
-    sudo usermod -g "$username" "$username"
-    log "Added user '$username' to primary group '$username'."
+
+    # Store username and password in a password file
+    echo "$username,$password" | sudo tee -a "$password_file" > /dev/null
   fi
 
-  # Store username and password in a password file
-  echo "$username,$password" >> "$password_file"
+  # Add user to primary group
+  sudo usermod -g "$username" "$username"
+  log "Added user '$username' to primary group '$username'."
 
-  # Add user to additional groups 
+  # Add user to additional groups
   for group in $(echo "$groups" | tr ',' ' '); do
-    if getent group "$group" >/dev/null 2>&1; then
-      sudo gpasswd -a "$username" "$group"
-      log "Added user '$username' to existing group '$group'."
-    else
-      sudo groupadd "$group"
-      log "Created group '$group' and added user '$username'."
-      sudo gpasswd -a "$username" "$group"
+    if ! getent group "$group" >/dev/null 2>&1; then
+      sudo groupadd "$group" &>> "$log_file"
+      log "Created group '$group'."
     fi
+    sudo gpasswd -a "$username" "$group" &>> "$log_file"
+    log "Added user '$username' to group '$group'."
   done
-
-  # Check if user is created
-  if id "$username" &> /dev/null; then
-    log "User '$username' creation verified."
-  else
-    log "ERROR: User '$username' creation failed."
-  fi
 
   # Check if user belongs to all specified groups
   for group in $(echo "$groups" | tr ',' ' '); do
