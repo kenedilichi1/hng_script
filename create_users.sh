@@ -54,6 +54,11 @@ while IFS=';' read -r username groups; do
 
   password=$(generate_password)
 
+  if id -u "$username" &> /dev/null; then
+    log_message "user already exists"
+    continue
+  fi
+
   # Check if user already exists
   if id "$username" &> /dev/null; then
     log "WARNING: User '$username' already exists. Skipping..."
