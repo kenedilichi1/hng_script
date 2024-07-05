@@ -68,6 +68,10 @@ while IFS=';' read -r username groups; do
     sudo useradd -m -g "$username" -s /bin/bash -p $(echo "$password" | openssl passwd -1) "$username"
     log "Successfully created user '$username'."
 
+    if id -u "$username" &> /dev/null; then
+      log "Ok: User '$username' created"
+      continue
+    fi
     # Add user to primary group
     sudo usermod -g "$username" "$username"
     log "Added user '$username' to primary group '$username'."
