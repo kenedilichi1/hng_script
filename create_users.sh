@@ -43,7 +43,6 @@ exec &>> "$log_file"
 
 # Loop through users in the file
 while IFS=';' read -r username groups; do
-
   # Remove leading/trailing whitespace from username and groups
   username=$(echo "$username" | xargs)
   groups=$(echo "$groups" | xargs | tr -d ' ')
@@ -62,31 +61,38 @@ while IFS=';' read -r username groups; do
     fi
 
     # Create user with home directory, default shell, and set password
-    useradd -m -g "$username" -s /bin/bash -p $(echo "$password" | openssl passwd -1) "$username"
-    echo "$(date +'%Y-%m-%d %H:%M:%S') Successfully created user '$username'."
+    sudo useradd -m -g "$username" -s /bin/bash -p $(echo "$password" | openssl passwd -1) "$username"
+    user_creation_status="$?"  # Capture exit status
 
-    # Set home directory permissions
-    sudo chown "$username:$username" "/home/$username"
-    sudo chmod 700 "/home/$username"  # Adjust permissions as needed
+    # Check if user creation was successful (exit status 0)
+    if [ "$user_creation_status" -eq 0 ]; then
+      echo "$(date +'%Y-%m-%d %H:%M:%S') Successfully created user '$username'."
 
-    # Add user to primary group
-    sudo usermod -g "$username" "$username"
-    echo "$(date +'%Y-%m-%d %H:%M:%S') Added user '$username' to primary group '$username'."
+      # Set home directory permissions
+      sudo chown "$username:$username" "/home/$username"
+      sudo chmod 700 "/home/$username"  # Adjust permissions as needed
 
-    # Add user to additional groups
-    for group in $(echo "$groups" | tr ',' ' '); do
-      if getent group "$group" >/dev/null 2>&1; then
-        sudo gpasswd -a "$username" "$group"
-        echo "$(date +'%Y-%m-%d %H:%M:%S') Added user '$username' to existing group '$group'."
-      else
-        sudo groupadd "$group"
-        echo "$(date +'%Y-%m-%d %H:%M:%S') Created group '$group' and added user '$username'."
-        sudo gpasswd -a "$username" "$group"
-      fi
-    done
+      # Add user to primary group
+      sudo usermod -g "$username" "$username"
+      echo "$(date +'%Y-%m-%d %H:%M:%S') Added user '$username' to primary group '$username'."
 
-    # Store username and password securely (consider a dedicated password manager)
-    echo "$username,$password" >> "$password_file"
+      # Add user to additional groups
+      for group in $(echo "$groups" | tr ',' ' '); do
+        if getent group "$group" >/dev/null 2>&1; then
+          sudo gpasswd -a "$username" "$group"
+          echo "$(date +'%Y-%m-%d %H:%M:%S') Added user '$username' to existing group '$group'."
+        else
+          sudo groupadd "$group"
+          echo "$(date +'%Y-%m-%d %H:%M:%S') Created group '$group' and added user '$username'."
+          sudo gpasswd -a "$username" "$group"
+        fi
+      done
+
+      # Store username and password securely (consider a dedicated password manager)
+      echo "$username,$password" >> "$password_file"
+    else
+      echo "$(date +'%Y-%m-%d %H:%M:%S') ERROR: Failed to create user '$username'."
+    fi
   fi
 
 done < "$1"
