@@ -1,116 +1,81 @@
 #!/bin/bash
 
-# Function to explain script usage
-usage() {
-  echo "Usage: $0 <user_list_file>" >&2
-  echo "  user_list_file: Path to a text file containing usernames and groups (username;group1,group2,...groupN)"
-  exit 1
-}
+#create log and password file
+LOG_MANAGER_FILE="/var/log/user_management.log"
+PASSWORD_FILE="/var/secure/user_password.txt"
 
-# Check if exactly one argument is provided
-if [ $# -ne 1 ]; then
-  usage
-  exit 1
-fi
 
-# Check if user list file exists
-if [[ -z "$1" || ! -f "$1" ]]; then
-  echo "Error: User list file '$1' does not exist." >&2
-  exit 1
-fi
-
-# Function to generate a random password
+#generate random password
 generate_password() {
-  length=16
-  cat /dev/urandom | tr -dc 'A-Za-z0-9!@#$%^&*' | fold -w "$length" | head -n 1
+    openssl  rand -base64 16
 }
 
-# Create log and password storage directories if they don't exist
-log_file="/var/log/user_management.log"
-password_file="/var/secure/user_passwords.txt"
-
-if [[ ! -d $(dirname "$log_file") ]]; then
-  sudo mkdir -p $(dirname "$log_file")
-fi
-
-if [[ ! -d $(dirname "$password_file") ]]; then
-  sudo mkdir -p $(dirname "$password_file")
-fi
-
-# Redirect standard output and error to log file
-exec &>> "$log_file"
-
-# Function to log messages
-log() {
-  echo "$(date +'%Y-%m-%d %H:%M:%S') $1" >> "$log_file"
+#log messages into the log manager file
+log_message() {
+    echo "$(date +'%Y-%M-%D-%S') - " "$1" >> "$LOG_MANAGER_FILE"
 }
 
-# Loop through users in the file
-while IFS=';' read -r username groups; do
+#ensure txt file is provided as argument
+if [ "$#" -eq 0 ]; then
+ log_message "Error: user file not found. Please pass the user file as base argument "
+ exit 1
+fi
 
-  # Remove leading/trailing whitespace from username and groups
-  username=$(echo "$username" | xargs)
-  groups=$(echo "$groups" | xargs | tr -d ' ')
 
-  password=$(generate_password)
+#use root privilege to create log file if it does not exists
+if [ ! -f "$LOG_MANAGER_FILE" ]; then
+ sudo touch "$LOG_MANAGER_FILE"
+ log_message "created log management file at"
+fi
 
-  # Check if user already exists
-  if id "$username" &> /dev/null; then
-    log "WARNING: User '$username' already exists. Skipping..."
-  else
-    # Create primary group if the primary group does not exist
-    if ! getent group "$username" >/dev/null 2>&1; then
-      sudo groupadd "$username"
-      log "Created primary group '$username' for user."
+#use root privilege to create password file if it does not exist
+if [ ! -f "$PASSWORD_FILE" ]; then
+ echo "creating secure password directory..."
+ sudo mkdir -p /var/secure
+ sudo chmod 700 /var/secure
+ sudo touch "$PASSWORD_FILE"
+ sudo chmod go-rwx "$PASSWORD_FILE"
+ log_message "created Password file "
+fi
+
+
+#use internal field separator(IFS) to get the username and group name
+while IFS=";" read -r username groups; do
+
+ username=$(echo "$username" | xargs)
+ groups=$(echo "$groups" | xargs)
+
+ #create group with username as group name
+ groupadd "$username"  &>> "$LOG_MANAGER_FILE"
+ log_message "created user group"
+
+ #check if user already exists
+ if id -u "$username" &> /dev/null; then
+  log_message "user already exists"
+  continue
+ fi
+
+ #add user in the /home directory
+ useradd -m -g  "$username" "$username" &>> "$LOG_MANAGER_FILE"
+ log_message "user created in home directory"
+
+ #add group in the etc/group directory
+ for group in $(echo "$groups" | tr ',' ' '); do
+    if ! grep -q  "^$groups:" /etc/group; then
+     groupadd "$group" &>> "$LOG_MANAGER_FILE"
+     log_message "created group: $group"
     fi
 
-    # Create user with extra options
-    sudo useradd -m -g "$username" -s /bin/bash -p $(echo "$password" | openssl passwd -1) "$username"
-    log "Successfully created user '$username'."
+   usermod -aG  "$group" "$username"
+   log_message  "Added user: $username to: $group"
+ done
 
-    # Add user to primary group
-    sudo usermod -g "$username" "$username"
-    log "Added user '$username' to primary group '$username'."
-  fi
-
-  # Store username and password in a password file
-  echo "$username,$password" >> "$password_file"
-
-  # Add user to additional groups 
-  for group in $(echo "$groups" | tr ',' ' '); do
-    if getent group "$group" >/dev/null 2>&1; then
-      sudo gpasswd -a "$username" "$group"
-      log "Added user '$username' to existing group '$group'."
-    else
-      sudo groupadd "$group"
-      log "Created group '$group' and added user '$username'."
-      sudo gpasswd -a "$username" "$group"
-    fi
-  done
-
-  # Check if user is created
-  if id "$username" &> /dev/null; then
-    log "User '$username' creation verified."
-  else
-    log "ERROR: User '$username' creation failed."
-  fi
-
-  # Check if user belongs to all specified groups
-  for group in $(echo "$groups" | tr ',' ' '); do
-    if id -nG "$username" | grep -qw "$group"; then
-      log "User '$username' is a member of group '$group'."
-    else
-      log "ERROR: User '$username' is not a member of group '$group'."
-    fi
-  done
-
-  # Check if user belongs to their personal group
-  if id -nG "$username" | grep -qw "$username"; then
-    log "User '$username' is a member of their personal group '$username'."
-  else
-    log "ERROR: User '$username' is not a member of their personal group '$username'."
-  fi
+ #assign passwords to users
+ password=$(generate_password)
+ echo "$username, $password" >> "$PASSWORD_FILE"
+ echo "$password" | passwd --stdin "$username" &>> "$LOG_MANAGER_FILE"
+ log_message "User Password generated and set for: $username"
 
 done < "$1"
 
-log "User creation process completed. Check $log_file for details."
+log_message "succeful"
